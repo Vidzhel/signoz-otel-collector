@@ -108,6 +108,7 @@ import (
 	"github.com/SigNoz/signoz-otel-collector/exporter/clickhouselogsexporter"
 	"github.com/SigNoz/signoz-otel-collector/exporter/clickhousemetricsexporter"
 	"github.com/SigNoz/signoz-otel-collector/exporter/clickhousetracesexporter"
+	"github.com/SigNoz/signoz-otel-collector/exporter/neo4jtracesexporter"
 	_ "github.com/SigNoz/signoz-otel-collector/pkg/parser/grok"
 	"github.com/SigNoz/signoz-otel-collector/processor/signozspanmetricsprocessor"
 )
@@ -186,6 +187,7 @@ func Components() (component.Factories, error) {
 	exporters := []component.ExporterFactory{
 		carbonexporter.NewFactory(),
 		clickhousemetricsexporter.NewFactory(),
+		neo4jtracesexporter.NewFactory(),
 		clickhousetracesexporter.NewFactory(),
 		clickhouselogsexporter.NewFactory(),
 		fileexporter.NewFactory(),
