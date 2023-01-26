@@ -16,19 +16,12 @@ package neo4jtracesexporter
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
 	"math"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/SigNoz/signoz-otel-collector/usage"
-	"go.opencensus.io/stats"
-	"go.opencensus.io/stats/view"
-	"go.opencensus.io/tag"
-	"go.opentelemetry.io/collector/component"
 	"go.uber.org/zap"
 )
 
@@ -41,8 +34,8 @@ const (
 	EncodingProto Encoding = "protobuf"
 )
 
-// SpanWriter for writing hops to ClickHouse
-type SpanWriter struct {
+// HopWriter for writing hops to ClickHouse
+type HopWriter struct {
 	logger        *zap.Logger
 	db            neo4j.SessionWithContext
 	traceDatabase string
@@ -52,17 +45,17 @@ type SpanWriter struct {
 	encoding      Encoding
 	delay         time.Duration
 	size          int
-	hops          chan *Span
+	hops          chan *Hop
 	finish        chan bool
 	done          sync.WaitGroup
 }
 
-// NewSpanWriter returns a SpanWriter for the database
-func NewSpanWriter(logger *zap.Logger, db neo4j.SessionWithContext, traceDatabase string, spansTable string, indexTable string, errorTable string, encoding Encoding, delay time.Duration, size int) *SpanWriter {
-	if err := view.Register(SpansCountView, SpansCountBytesView); err != nil {
-		return nil
-	}
-	writer := &SpanWriter{
+// NewHopWriter returns a HopWriter for the database
+func NewHopWriter(logger *zap.Logger, db neo4j.SessionWithContext, traceDatabase string, spansTable string, indexTable string, errorTable string, encoding Encoding, delay time.Duration, size int) *HopWriter {
+	//if err := view.Register(SpansCountView, SpansCountBytesView); err != nil {
+	//	return nil
+	//}
+	writer := &HopWriter{
 		logger:        logger,
 		db:            db,
 		traceDatabase: traceDatabase,
@@ -72,7 +65,7 @@ func NewSpanWriter(logger *zap.Logger, db neo4j.SessionWithContext, traceDatabas
 		encoding:      encoding,
 		delay:         delay,
 		size:          size,
-		hops:          make(chan *Span, size),
+		hops:          make(chan *Hop, size),
 		finish:        make(chan bool),
 	}
 
@@ -81,8 +74,8 @@ func NewSpanWriter(logger *zap.Logger, db neo4j.SessionWithContext, traceDatabas
 	return writer
 }
 
-func (w *SpanWriter) backgroundWriter() {
-	batch := make([]*Span, 0, w.size)
+func (w *HopWriter) backgroundWriter() {
+	batch := make([]*Hop, 0, w.size)
 
 	timer := time.After(w.delay)
 	last := time.Now()
@@ -110,7 +103,7 @@ func (w *SpanWriter) backgroundWriter() {
 				w.logger.Error("Could not write a batch of hops", zap.Error(err))
 			}
 
-			batch = make([]*Span, 0, w.size)
+			batch = make([]*Hop, 0, w.size)
 			last = time.Now()
 		}
 
@@ -122,142 +115,174 @@ func (w *SpanWriter) backgroundWriter() {
 	}
 }
 
-func (w *SpanWriter) writeBatch(batch []*Span) error {
+func (w *HopWriter) writeBatch(batch []*Hop) error {
 
-	if w.spansTable != "" {
-		if err := w.writeModelBatch(batch); err != nil {
-			logBatch := batch[:int(math.Min(10, float64(len(batch))))]
-			w.logger.Error("Could not write a batch of spans to model table: ", zap.Any("batch", logBatch), zap.Error(err))
-			return err
-		}
+	//if w.spansTable != "" {
+	//	if err := w.writeModelBatch(batch); err != nil {
+	//		logBatch := batch[:int(math.Min(10, float64(len(batch))))]
+	//		w.logger.Error("Could not write a batch of spans to model table: ", zap.Any("batch", logBatch), zap.Error(err))
+	//		return err
+	//	}
+	//}
+	//if w.indexTable != "" {
+	if err := w.writeHops(batch); err != nil {
+		logBatch := batch[:int(math.Min(10, float64(len(batch))))]
+		w.logger.Error("Could not write a batch of spans to index table: ", zap.Any("batch", logBatch), zap.Error(err))
+		return err
 	}
-	if w.indexTable != "" {
-		if err := w.writeIndexBatch(batch); err != nil {
-			logBatch := batch[:int(math.Min(10, float64(len(batch))))]
-			w.logger.Error("Could not write a batch of spans to index table: ", zap.Any("batch", logBatch), zap.Error(err))
-			return err
-		}
-	}
-	if w.errorTable != "" {
-		if err := w.writeErrorBatch(batch); err != nil {
-			logBatch := batch[:int(math.Min(10, float64(len(batch))))]
-			w.logger.Error("Could not write a batch of spans to error table: ", zap.Any("batch", logBatch), zap.Error(err))
-			return err
-		}
-	}
+	//}
+	//if w.errorTable != "" {
+	//	if err := w.writeErrorBatch(batch); err != nil {
+	//		logBatch := batch[:int(math.Min(10, float64(len(batch))))]
+	//		w.logger.Error("Could not write a batch of spans to error table: ", zap.Any("batch", logBatch), zap.Error(err))
+	//		return err
+	//	}
+	//}
 
 	return nil
 }
 
-func (w *SpanWriter) writeIndexBatch(batchSpans []*Span) error {
-
+func (w *HopWriter) writeHops(batchHops []*Hop) error {
 	ctx := context.Background()
-	statement, err := w.db.PrepareBatch(ctx, fmt.Sprintf("INSERT INTO %s.%s", w.traceDatabase, w.indexTable))
-	if err != nil {
-		logBatch := batchSpans[:int(math.Min(10, float64(len(batchSpans))))]
-		w.logger.Error("Could not prepare batch for index table: ", zap.Any("batch", logBatch), zap.Error(err))
-		return err
-	}
 
-	for _, span := range batchSpans {
-		err = statement.Append(
-			time.Unix(0, int64(span.StartTimeUnixNano)),
-			span.TraceId,
-			span.SpanId,
-			span.ParentSpanId,
-			span.ServiceName,
-			span.Name,
-			span.Kind,
-			span.DurationNano,
-			span.StatusCode,
-			span.ExternalHttpMethod,
-			span.ExternalHttpUrl,
-			span.Component,
-			span.DBSystem,
-			span.DBName,
-			span.DBOperation,
-			span.PeerService,
-			span.Events,
-			span.HttpMethod,
-			span.HttpUrl,
-			span.HttpCode,
-			span.HttpRoute,
-			span.HttpHost,
-			span.MsgSystem,
-			span.MsgOperation,
-			span.HasError,
-			span.TagMap,
-			span.GRPCMethod,
-			span.GRPCCode,
-			span.RPCSystem,
-			span.RPCService,
-			span.RPCMethod,
-			span.ResponseStatusCode,
-			span.StringTagMap,
-			span.NumberTagMap,
-			span.BoolTagMap,
-		)
+	//statement, err := w.db.PrepareBatch(ctx, fmt.Sprintf("INSERT INTO %s.%s", w.traceDatabase, w.indexTable))
+	//if err != nil {
+	//	logBatch := batchHops[:int(math.Min(10, float64(len(batchHops))))]
+	//	w.logger.Error("Could not prepare batch for index table: ", zap.Any("batch", logBatch), zap.Error(err))
+	//	return err
+	//}
+
+	for _, hop := range batchHops {
+		_, err := w.db.Run(ctx, `
+MERGE (operation:Operation {name: $toOperationName, resourceName: $toResourceName})
+ON CREATE
+    SET
+        operation.createdAt =  timestamp(),
+        operation.lastUsedAt = timestamp()
+ON MATCH
+    SET operation.lastUsedAt = timestamp()
+
+MERGE (toResource:Resource {name: $toResourceName})
+ON CREATE
+    SET
+        toResource.createdAt =  timestamp(),
+        toResource.lastUsedAt = timestamp()
+        toResource.type = $toResourceType
+ON MATCH
+    SET toResource.lastUsedAt = timestamp()
+
+MERGE
+    (toResource)-[provides:Provides]->(operation)
+ON CREATE
+    SET
+        provides.createdAt =  timestamp(),
+        provides.lastUsedAt = timestamp()
+ON MATCH
+    SET provides.lastUsedAt = timestamp()
+
+MERGE (fromResource:Resource {name: $fromResourceName})
+ON CREATE
+    SET
+        fromResource.createdAt =  timestamp(),
+        fromResource.lastUsedAt = timestamp()
+        fromResource.type = $fromResourceType
+ON MATCH
+    SET fromResource.lastUsedAt = timestamp()
+
+MERGE
+    (fromResource)-[c:Calls]->(operation)
+ON CREATE
+    SET
+        c.createdAt =  timestamp(),
+        c.lastUsedAt = timestamp(),
+        c.callsCount = 1,
+        c.errorsCount = CASE $isErrorHop
+                            WHEN true THEN 1
+                            ELSE 0
+                        END,
+        c.type = CASE $isAsyncHop
+                    WHEN true THEN "async"
+                    ELSE "sync"
+                 END
+ON MATCH
+    SET c.lastUsedAt = timestamp(),
+    c.callsCount = c.callsCount + 1,
+    c.errorsCount = c.errorsCount + CASE $isErrorHop 
+                        WHEN true THEN 1
+                        ELSE 0
+                    END
+						`, map[string]any{
+			"fromResourceName": hop.From.Name,
+			"fromResourceType": hop.From.Type,
+			"toResourceName":   hop.To.DefinedIn.Name,
+			"toResourceType":   hop.To.DefinedIn.Type,
+			"toOperationName":  hop.To.Name,
+			"isAsyncHop":       hop.IsAsynchronous,
+			"isErrorHop":       hop.IsWithError,
+		})
+
 		if err != nil {
-			w.logger.Error("Could not append span to batch: ", zap.Object("span", span), zap.Error(err))
+			w.logger.Error("Could not upsert hop", zap.Object("hop", hop), zap.Error(err))
 			return err
 		}
 	}
 
-	start := time.Now()
-
-	err = statement.Send()
-
-	ctx, _ = tag.New(ctx,
-		tag.Upsert(exporterKey, string(component.DataTypeTraces)),
-		tag.Upsert(tableKey, w.indexTable),
-	)
-	stats.Record(ctx, writeLatencyMillis.M(int64(time.Since(start).Milliseconds())))
-	return err
+	//start := time.Now()
+	//
+	//err = statement.Send()
+	//
+	//ctx, _ = tag.New(ctx,
+	//	tag.Upsert(exporterKey, string(component.DataTypeTraces)),
+	//	tag.Upsert(tableKey, w.indexTable),
+	//)
+	//stats.Record(ctx, writeLatencyMillis.M(int64(time.Since(start).Milliseconds())))
+	//return err
+	return nil
 }
 
-func (w *SpanWriter) writeErrorBatch(batchSpans []*Span) error {
-
-	ctx := context.Background()
-	statement, err := w.db.PrepareBatch(ctx, fmt.Sprintf("INSERT INTO %s.%s", w.traceDatabase, w.errorTable))
-	if err != nil {
-		logBatch := batchSpans[:int(math.Min(10, float64(len(batchSpans))))]
-		w.logger.Error("Could not prepare batch for error table: ", zap.Any("batch", logBatch), zap.Error(err))
-		return err
-	}
-
-	for _, span := range batchSpans {
-		if span.ErrorEvent.Name == "" {
-			continue
-		}
-		err = statement.Append(
-			time.Unix(0, int64(span.ErrorEvent.TimeUnixNano)),
-			span.ErrorID,
-			span.ErrorGroupID,
-			span.TraceId,
-			span.SpanId,
-			span.ServiceName,
-			span.ErrorEvent.AttributeMap["exception.type"],
-			span.ErrorEvent.AttributeMap["exception.message"],
-			span.ErrorEvent.AttributeMap["exception.stacktrace"],
-			stringToBool(span.ErrorEvent.AttributeMap["exception.escaped"]),
-		)
-		if err != nil {
-			w.logger.Error("Could not append span to batch: ", zap.Object("span", span), zap.Error(err))
-			return err
-		}
-	}
-
-	start := time.Now()
-
-	err = statement.Send()
-
-	ctx, _ = tag.New(ctx,
-		tag.Upsert(exporterKey, string(component.DataTypeTraces)),
-		tag.Upsert(tableKey, w.errorTable),
-	)
-	stats.Record(ctx, writeLatencyMillis.M(int64(time.Since(start).Milliseconds())))
-	return err
-}
+//func (w *HopWriter) writeErrorBatch(batchSpans []*Span) error {
+//
+//	ctx := context.Background()
+//	statement, err := w.db.PrepareBatch(ctx, fmt.Sprintf("INSERT INTO %s.%s", w.traceDatabase, w.errorTable))
+//	if err != nil {
+//		logBatch := batchSpans[:int(math.Min(10, float64(len(batchSpans))))]
+//		w.logger.Error("Could not prepare batch for error table: ", zap.Any("batch", logBatch), zap.Error(err))
+//		return err
+//	}
+//
+//	for _, span := range batchSpans {
+//		if span.ErrorEvent.Name == "" {
+//			continue
+//		}
+//		err = statement.Append(
+//			time.Unix(0, int64(span.ErrorEvent.TimeUnixNano)),
+//			span.ErrorID,
+//			span.ErrorGroupID,
+//			span.TraceId,
+//			span.SpanId,
+//			span.ServiceName,
+//			span.ErrorEvent.AttributeMap["exception.type"],
+//			span.ErrorEvent.AttributeMap["exception.message"],
+//			span.ErrorEvent.AttributeMap["exception.stacktrace"],
+//			stringToBool(span.ErrorEvent.AttributeMap["exception.escaped"]),
+//		)
+//		if err != nil {
+//			w.logger.Error("Could not append span to batch: ", zap.Object("span", span), zap.Error(err))
+//			return err
+//		}
+//	}
+//
+//	start := time.Now()
+//
+//	err = statement.Send()
+//
+//	ctx, _ = tag.New(ctx,
+//		tag.Upsert(exporterKey, string(component.DataTypeTraces)),
+//		tag.Upsert(tableKey, w.errorTable),
+//	)
+//	stats.Record(ctx, writeLatencyMillis.M(int64(time.Since(start).Milliseconds())))
+//	return err
+//}
 
 func stringToBool(s string) bool {
 	if strings.ToLower(s) == "true" {
@@ -266,59 +291,59 @@ func stringToBool(s string) bool {
 	return false
 }
 
-func (w *SpanWriter) writeModelBatch(batchSpans []*Span) error {
-	ctx := context.Background()
-	statement, err := w.db.PrepareBatch(ctx, fmt.Sprintf("INSERT INTO %s.%s", w.traceDatabase, w.spansTable))
-	if err != nil {
-		logBatch := batchSpans[:int(math.Min(10, float64(len(batchSpans))))]
-		w.logger.Error("Could not prepare batch for model table: ", zap.Any("batch", logBatch), zap.Error(err))
-		return err
-	}
+//func (w *HopWriter) writeModelBatch(batchSpans []*Span) error {
+//	ctx := context.Background()
+//	statement, err := w.db.PrepareBatch(ctx, fmt.Sprintf("INSERT INTO %s.%s", w.traceDatabase, w.spansTable))
+//	if err != nil {
+//		logBatch := batchSpans[:int(math.Min(10, float64(len(batchSpans))))]
+//		w.logger.Error("Could not prepare batch for model table: ", zap.Any("batch", logBatch), zap.Error(err))
+//		return err
+//	}
+//
+//	metrics := map[string]usage.Metric{}
+//	for _, span := range batchSpans {
+//		var serialized []byte
+//
+//		serialized, err = json.Marshal(span.TraceModel)
+//
+//		if err != nil {
+//			return err
+//		}
+//
+//		err = statement.Append(time.Unix(0, int64(span.StartTimeUnixNano)), span.TraceId, string(serialized))
+//		if err != nil {
+//			w.logger.Error("Could not append span to batch: ", zap.Object("span", span), zap.Error(err))
+//			return err
+//		}
+//
+//		usage.AddMetric(metrics, *span.Tenant, 1, int64(len(serialized)))
+//	}
+//	start := time.Now()
+//
+//	err = statement.Send()
+//	ctx, _ = tag.New(ctx,
+//		tag.Upsert(exporterKey, string(component.DataTypeTraces)),
+//		tag.Upsert(tableKey, w.spansTable),
+//	)
+//	stats.Record(ctx, writeLatencyMillis.M(int64(time.Since(start).Milliseconds())))
+//	if err != nil {
+//		return err
+//	}
+//	for k, v := range metrics {
+//		stats.RecordWithTags(ctx, []tag.Mutator{tag.Upsert(usage.TagTenantKey, k)}, ExporterSigNozSentSpans.M(int64(v.Count)), ExporterSigNozSentSpansBytes.M(int64(v.Size)))
+//	}
+//
+//	return nil
+//}
 
-	metrics := map[string]usage.Metric{}
-	for _, span := range batchSpans {
-		var serialized []byte
-
-		serialized, err = json.Marshal(span.TraceModel)
-
-		if err != nil {
-			return err
-		}
-
-		err = statement.Append(time.Unix(0, int64(span.StartTimeUnixNano)), span.TraceId, string(serialized))
-		if err != nil {
-			w.logger.Error("Could not append span to batch: ", zap.Object("span", span), zap.Error(err))
-			return err
-		}
-
-		usage.AddMetric(metrics, *span.Tenant, 1, int64(len(serialized)))
-	}
-	start := time.Now()
-
-	err = statement.Send()
-	ctx, _ = tag.New(ctx,
-		tag.Upsert(exporterKey, string(component.DataTypeTraces)),
-		tag.Upsert(tableKey, w.spansTable),
-	)
-	stats.Record(ctx, writeLatencyMillis.M(int64(time.Since(start).Milliseconds())))
-	if err != nil {
-		return err
-	}
-	for k, v := range metrics {
-		stats.RecordWithTags(ctx, []tag.Mutator{tag.Upsert(usage.TagTenantKey, k)}, ExporterSigNozSentSpans.M(int64(v.Count)), ExporterSigNozSentSpansBytes.M(int64(v.Size)))
-	}
-
-	return nil
-}
-
-// WriteSpan writes the encoded span
-func (w *SpanWriter) WriteSpan(span *Span) error {
-	w.hops <- span
+// WriteHop writes the encoded span
+func (w *HopWriter) WriteHop(hop *Hop) error {
+	w.hops <- hop
 	return nil
 }
 
 // Close Implements io.Closer and closes the underlying storage
-func (w *SpanWriter) Close(_ context.Context) error {
+func (w *HopWriter) Close(_ context.Context) error {
 	w.finish <- true
 	w.done.Wait()
 	return nil

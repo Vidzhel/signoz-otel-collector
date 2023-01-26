@@ -26,7 +26,6 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/spf13/viper"
 	"go.opencensus.io/stats"
-	"go.opencensus.io/stats/view"
 	"go.opencensus.io/tag"
 	"go.uber.org/zap"
 )
@@ -42,7 +41,7 @@ type Factory struct {
 
 // Writer writes hops to storage.
 type Writer interface {
-	WriteSpan(span *Span) error
+	WriteHop(span *Hop) error
 	Close(ctx context.Context) error
 }
 
@@ -54,26 +53,26 @@ var (
 	tableKey           = tag.MustNewKey("table")
 )
 
-// NewFactory creates a new Factory.
+// Neo4jNewFactory creates a new Factory.
 func Neo4jNewFactory(migrations string, datasource string, dockerMultiNodeCluster bool) *Factory {
-	writeLatencyDistribution := view.Distribution(100, 250, 500, 750, 1000, 2000, 4000, 8000, 16000, 32000, 64000, 128000, 256000, 512000)
+	//writeLatencyDistribution := view.Distribution(100, 250, 500, 750, 1000, 2000, 4000, 8000, 16000, 32000, 64000, 128000, 256000, 512000)
 
-	writeLatencyView := &view.View{
-		Name:        "exporter_db_write_latency",
-		Measure:     writeLatencyMillis,
-		Description: writeLatencyMillis.Description(),
-		TagKeys:     []tag.Key{exporterKey, tableKey},
-		Aggregation: writeLatencyDistribution,
-	}
+	//writeLatencyView := &view.View{
+	//	Name:        "exporter_db_write_latency",
+	//	Measure:     writeLatencyMillis,
+	//	Description: writeLatencyMillis.Description(),
+	//	TagKeys:     []tag.Key{exporterKey, tableKey},
+	//	Aggregation: writeLatencyDistribution,
+	//}
 
-	view.Register(writeLatencyView)
+	//view.Register(writeLatencyView)
 	return &Factory{
 		Options: NewOptions(migrations, datasource, dockerMultiNodeCluster, primaryNamespace),
 		// makeReader: func(db *clickhouse.Conn, operationsTable, indexTable, spansTable string) (spanstore.Reader, error) {
 		// 	return store.NewTraceReader(db, operationsTable, indexTable, spansTable), nil
 		// },
 		makeWriter: func(logger *zap.Logger, db neo4j.SessionWithContext, traceDatabase string, spansTable string, indexTable string, errorTable string, encoding Encoding, delay time.Duration, size int) (Writer, error) {
-			return NewSpanWriter(logger, db, traceDatabase, spansTable, indexTable, errorTable, encoding, delay, size), nil
+			return NewHopWriter(logger, db, traceDatabase, spansTable, indexTable, errorTable, encoding, delay, size), nil
 		},
 	}
 }

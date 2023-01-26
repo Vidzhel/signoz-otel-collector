@@ -19,6 +19,7 @@ import (
 	"crypto/md5"
 	"encoding/json"
 	"fmt"
+	"go.uber.org/zap/zapcore"
 	"net/url"
 	"strconv"
 	"strings"
@@ -371,9 +372,25 @@ type Hop struct {
 	To             Operation
 }
 
+func (e Hop) MarshalLogObject(enc zapcore.ObjectEncoder) error {
+	enc.AddBool("isAsynchronous", e.IsAsynchronous)
+	enc.AddBool("isWithError", e.IsWithError)
+	err := enc.AddObject("From", e.From)
+	if err != nil {
+		return err
+	}
+	return enc.AddObject("To", e.To)
+}
+
 type Resource struct {
 	Name string
 	Type ResourceType
+}
+
+func (e Resource) MarshalLogObject(enc zapcore.ObjectEncoder) error {
+	enc.AddString("name", e.Name)
+	enc.AddInt("type", int(e.Type))
+	return nil
 }
 
 type ResourceType int
@@ -388,6 +405,11 @@ const (
 type Operation struct {
 	Name      string
 	DefinedIn Resource
+}
+
+func (e Operation) MarshalLogObject(enc zapcore.ObjectEncoder) error {
+	enc.AddString("name", e.Name)
+	return enc.AddObject("definedIn", e.DefinedIn)
 }
 
 // traceDataPusher implements OTEL exporterhelper.traceDataPusher
@@ -419,8 +441,6 @@ func (s *storage) pushTraceData(ctx context.Context, td ptrace.Traces) error {
 			}
 		}
 	}
-
-	hops := make([]Hop, 0, len(structuredSpans))
 
 	for _, span := range structuredSpans {
 		if span.Kind() == ptrace.SpanKindInternal {
@@ -469,12 +489,10 @@ func (s *storage) pushTraceData(ctx context.Context, td ptrace.Traces) error {
 
 		}
 
-		hops = append(hops, hop)
-	}
-
-	err := s.Writer.WriteSpan(structuredSpan)
-	if err != nil {
-		zap.S().Error("Error in writing hops to clickhouse: ", err)
+		err := s.Writer.WriteHop(&hop)
+		if err != nil {
+			zap.S().Error("Error in writing hops to clickhouse: ", err)
+		}
 	}
 
 	return nil
