@@ -54,13 +54,14 @@ func newExporter(cfg component.ExporterConfig, logger *zap.Logger) (*storage, er
 		return nil, err
 	}
 
-	storage := storage{Writer: spanWriter}
+	storage := storage{Writer: spanWriter, Logger: logger}
 
 	return &storage, nil
 }
 
 type storage struct {
 	Writer Writer
+	Logger *zap.Logger
 }
 
 func makeJaegerProtoReferences(
@@ -125,7 +126,7 @@ func makeJaegerProtoReferences(
 //	}
 //}
 
-func NewResourceFromSpan(span ptrace.Span) Resource {
+func (s *storage) NewResourceFromSpan(span ptrace.Span) Resource {
 	name := "<nil-service-name>"
 	resourceType := ResourceTypeUnknown
 
@@ -164,16 +165,17 @@ func NewResourceFromSpan(span ptrace.Span) Resource {
 		}
 	}
 
+	s.Logger.Info(fmt.Sprintf("unknown span: %v", span.Attributes().AsRaw()))
 	return Resource{
 		Name: name,
 		Type: resourceType,
 	}
 }
 
-func NewOperationFromSpan(span ptrace.Span) Operation {
+func (s *storage) NewOperationFromSpan(span ptrace.Span) Operation {
 	return Operation{
 		Name:      span.Name(),
-		DefinedIn: NewResourceFromSpan(span),
+		DefinedIn: s.NewResourceFromSpan(span),
 	}
 }
 
@@ -443,11 +445,11 @@ func (s *storage) pushTraceData(ctx context.Context, td ptrace.Traces) error {
 	}
 
 	for _, span := range structuredSpans {
-		if span.Kind() == ptrace.SpanKindInternal {
+		if span.Kind() != ptrace.SpanKindClient || span.Kind() != ptrace.SpanKindServer || span.Kind() != ptrace.SpanKindProducer || span.Kind() != ptrace.SpanKindConsumer {
 			continue
 		}
 
-		parent, hasNoParent := structuredSpans[span.ParentSpanID()]
+		parent, hasParent := structuredSpans[span.ParentSpanID()]
 		_, hasChildrenSpans := childrenSpans[span.SpanID()]
 		hasNoCorrespondingServerSpan := !hasChildrenSpans
 
@@ -469,22 +471,26 @@ func (s *storage) pushTraceData(ctx context.Context, td ptrace.Traces) error {
 			hop = Hop{
 				IsAsynchronous: isAsyncRequest,
 				IsWithError:    isHasError,
-				From:           NewResourceFromSpan(span),
-				To:             NewOperationFromSpan(span),
+				From:           s.NewResourceFromSpan(span),
+				To:             s.NewOperationFromSpan(span),
 			}
 		} else {
 			// current span is server one, get parent one - client and define resource, operations
 			clientSpan := parent
-			if hasNoParent {
+			if !hasParent {
 				clientSpan = span
 			}
 			serverSpan := span
 
+			//zap.S().Errorf("1, Client span: %v, parent span: %v, span: %v", clientSpan, parent, span)
+			//s.Logger.Error(fmt.Sprintf("2, Client span: %v, parent span: %v, span: %v", clientSpan, parent, span))
+			//fmt.Printf("3. Client span: %v, parent span: %v, span: %v", clientSpan, parent, span)
+
 			hop = Hop{
 				IsAsynchronous: isAsyncRequest,
 				IsWithError:    isHasError,
-				From:           NewResourceFromSpan(clientSpan),
-				To:             NewOperationFromSpan(serverSpan),
+				From:           s.NewResourceFromSpan(clientSpan),
+				To:             s.NewOperationFromSpan(serverSpan),
 			}
 
 		}

@@ -1899,8 +1899,6 @@ go.opentelemetry.io/collector/processor/memorylimiterprocessor v0.66.0 h1:JLzuWc
 go.opentelemetry.io/collector/processor/memorylimiterprocessor v0.66.0/go.mod h1:KfHfOzND4tzQYewrYzi/NGzvOV3wR7jzWTkxSR00lRI=
 go.opentelemetry.io/collector/receiver/otlpreceiver v0.66.0 h1:ZHEOeGOIYIDTKhI9xs30/obFfhUbb9b2+e/eahp1fJA=
 go.opentelemetry.io/collector/receiver/otlpreceiver v0.66.0/go.mod h1:pb+dcV+KJ44dP+CqV0N6L6dTeDDvCXB8StCqwlrrSkM=
-go.opentelemetry.io/collector/semconv v0.66.0 h1:gz4fYzOVOt1EQCcOL6pbSmTRj93pZErjHD+H100pH+4=
-go.opentelemetry.io/collector/semconv v0.66.0/go.mod h1:5o9yhOa+ABt7g2E5JABDxGZ1PQPbtfxrKNbYn+LOTXU=
 go.opentelemetry.io/collector/semconv v0.70.0 h1:zuito4A9yoB5v+4M7GnwMBNcQdfhutHeysDAkTaGJjw=
 go.opentelemetry.io/collector/semconv v0.70.0/go.mod h1:UAp+qAMqEXOD0eEBmWJ3IJ5+LkF7zVTgmfufwpHmL8w=
 go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.36.4 h1:PRXhsszxTt5bbPriTjmaweWUsAnJYeWBhUMLRetUgBU=

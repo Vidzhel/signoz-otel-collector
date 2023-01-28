@@ -166,7 +166,7 @@ MERGE (toResource:Resource {name: $toResourceName})
 ON CREATE
     SET
         toResource.createdAt =  timestamp(),
-        toResource.lastUsedAt = timestamp()
+        toResource.lastUsedAt = timestamp(),
         toResource.type = $toResourceType
 ON MATCH
     SET toResource.lastUsedAt = timestamp()
@@ -184,7 +184,7 @@ MERGE (fromResource:Resource {name: $fromResourceName})
 ON CREATE
     SET
         fromResource.createdAt =  timestamp(),
-        fromResource.lastUsedAt = timestamp()
+        fromResource.lastUsedAt = timestamp(),
         fromResource.type = $fromResourceType
 ON MATCH
     SET fromResource.lastUsedAt = timestamp()
