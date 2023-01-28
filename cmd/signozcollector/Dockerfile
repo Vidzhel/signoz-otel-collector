@@ -2,16 +2,21 @@
 FROM golang:1.18-alpine as build
 RUN apk --update add ca-certificates
 
-WORKDIR /src
-COPY . .
+RUN export GOOS=$(echo ${TARGETPLATFORM} | cut -d / -f1) && \
+    export GOARCH=$(echo ${TARGETPLATFORM} | cut -d / -f2) \
 
 ARG TARGETPLATFORM
 
-RUN export GOOS=$(echo ${TARGETPLATFORM} | cut -d / -f1) && \
-    export GOARCH=$(echo ${TARGETPLATFORM} | cut -d / -f2)
-
 ENV OS111MODULE=on
 ENV CGO_ENABLED=0
+
+WORKDIR /src
+
+COPY go.mod .
+COPY go.sum .
+RUN go mod download
+
+COPY . .
 
 RUN cd cmd/signozcollector && go build -tags timetzdata -o /out/signoz-collector
 
