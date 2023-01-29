@@ -466,7 +466,7 @@ func (s *storage) inferFromResourceFromServerSpan(span ptrace.Span) Resource {
 	}
 
 	if resource == nil {
-		s.Logger.Info(fmt.Sprintf("unknown span: %v", span.Attributes().AsRaw()))
+		s.Logger.Info(fmt.Sprintf("unknown server span: %v", span.Attributes().AsRaw()))
 		resource = &Resource{
 			Name: "<nil-service-name>",
 			Type: ResourceTypeUnknown,
@@ -549,7 +549,7 @@ func (s *storage) inferToResourceFromClientSpan(span ptrace.Span) Resource {
 	}
 
 	if resource == nil {
-		s.Logger.Info(fmt.Sprintf("unknown span: %v", span.Attributes().AsRaw()))
+		s.Logger.Info(fmt.Sprintf("unknown client span: %v", span.Attributes().AsRaw()))
 		resource = &Resource{
 			Name: "<nil-service-name>",
 			Type: ResourceTypeUnknown,
