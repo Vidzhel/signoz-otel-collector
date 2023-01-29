@@ -416,18 +416,33 @@ func extractIsError(span ptrace.Span) bool {
 
 func (s *storage) newResource(resource pcommon.Resource) Resource {
 	serviceName, found := resource.Attributes().Get(conventions.AttributeServiceName)
+	var newResource *Resource = nil
+
 	if found {
-		return Resource{
+		newResource = &Resource{
 			Name: serviceName.Str(),
 			Type: ResourceTypeService,
 		}
 	}
 
-	s.Logger.Info("can't get resource name from resource")
-	return Resource{
-		Name: "<nil-service-name>",
-		Type: ResourceTypeUnknown,
+	if newResource == nil {
+		s.Logger.Info("can't get resource name from resource")
+		return Resource{
+			Name: "<nil-service-name>",
+			Type: ResourceTypeUnknown,
+		}
 	}
+
+	newResource.Name = strings.TrimSpace(newResource.Name)
+	if newResource.Name == "" {
+		s.Logger.Info("empty resource name")
+		return Resource{
+			Name: "<nil-service-name>",
+			Type: ResourceTypeUnknown,
+		}
+	}
+
+	return *newResource
 }
 
 func (s *storage) newResourceFromServerSpan(span ptrace.Span) Resource {
@@ -458,7 +473,16 @@ func (s *storage) newResourceFromServerSpan(span ptrace.Span) Resource {
 		}
 	}
 
-	s.Logger.Info(fmt.Sprintf("resource from server span, name: %v, attributes: %v", resource.Name, span.Attributes()))
+	resource.Name = strings.TrimSpace(resource.Name)
+	if resource.Name == "" {
+		s.Logger.Info(fmt.Sprintf("empty resource name inferred from server span, args: %v", span.Attributes().AsRaw()))
+		return Resource{
+			Name: "<nil-service-name>",
+			Type: ResourceTypeUnknown,
+		}
+	}
+
+	s.Logger.Info(fmt.Sprintf("resource from server span, name: %v, attributes: %v", resource.Name, span.Attributes().AsRaw()))
 	return *resource
 }
 
@@ -532,20 +556,41 @@ func (s *storage) newResourceFromClientSpan(span ptrace.Span) Resource {
 		}
 	}
 
-	s.Logger.Info(fmt.Sprintf("resource from client span, name: %v, attributes: %v", resource.Name, span.Attributes()))
+	resource.Name = strings.TrimSpace(resource.Name)
+	if resource.Name == "" {
+		s.Logger.Info(fmt.Sprintf("empty resource name inferred from client span, args: %v", span.Attributes().AsRaw()))
+		return Resource{
+			Name: "<nil-service-name>",
+			Type: ResourceTypeUnknown,
+		}
+	}
+
+	s.Logger.Info(fmt.Sprintf("resource from client span, name: %v, attributes: %v", resource.Name, span.Attributes().AsRaw()))
 	return *resource
 }
 
 func (s *storage) newOperationFromSpanAndResource(spanAndResource SpanAndResource) Operation {
+	name := strings.TrimSpace(spanAndResource.Span.Name())
+	if name == "" {
+		s.Logger.Info(fmt.Sprintf("empty operation name inferred from client span, args: %v", spanAndResource.Span.Attributes().AsRaw()))
+		name = "<default>"
+	}
+
 	return Operation{
-		Name:      spanAndResource.Span.Name(),
+		Name:      name,
 		DefinedIn: s.newResource(*spanAndResource.Resource),
 	}
 }
 
 func (s *storage) newOperationFromClientSpan(span ptrace.Span) Operation {
+	name := strings.TrimSpace(span.Name())
+	if name == "" {
+		s.Logger.Info(fmt.Sprintf("empty operation name inferred from client span, args: %v", span.Attributes().AsRaw()))
+		name = "<default>"
+	}
+
 	return Operation{
-		Name:      span.Name(),
+		Name:      name,
 		DefinedIn: s.newResourceFromClientSpan(span),
 	}
 }
