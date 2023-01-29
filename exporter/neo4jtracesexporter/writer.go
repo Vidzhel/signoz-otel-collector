@@ -162,7 +162,14 @@ ON CREATE
 ON MATCH
     SET operation.lastUsedAt = timestamp()
 
-MERGE (toResource:Resource {name: $toResourceName})
+OPTIONAL MATCH (r:Resource) 
+    WHERE $toResourceName =~ "(?i).*" + r.name + ".*" 
+		OR r.name =~ "(?i).*" + $toResourceName + ".*"
+WITH CASE r IS NULL
+        WHEN true THEN $toResourceName
+        ELSE r.name
+     END as resourceName
+MERGE (toResource:Resource {name: resourceName})
 ON CREATE
     SET
         toResource.createdAt =  timestamp(),
@@ -180,7 +187,14 @@ ON CREATE
 ON MATCH
     SET provides.lastUsedAt = timestamp()
 
-MERGE (fromResource:Resource {name: $fromResourceName})
+OPTIONAL MATCH (r:Resource) 
+    WHERE $fromResourceName =~ "(?i).*" + r.name + ".*" 
+		OR r.name =~ "(?i).*" + $fromResourceName + ".*"
+WITH CASE r IS NULL
+        WHEN true THEN $fromResourceName
+        ELSE r.name
+     END as resourceName
+MERGE (fromResource:Resource {name: resourceName})
 ON CREATE
     SET
         fromResource.createdAt =  timestamp(),
