@@ -354,7 +354,7 @@ func (s *storage) pushTraceData(ctx context.Context, td ptrace.Traces) error {
 				IsAsynchronous: isAsyncRequest,
 				IsWithError:    isHasError,
 				From:           s.newResource(*spanAndResource.Resource),
-				To:             s.newOperationFromClientSpan(*spanAndResource.Span),
+				To:             s.inferToOperationFromClientSpan(*spanAndResource.Span),
 			}
 		} else if !hasParent {
 			s.Logger.Info(fmt.Sprintf("No parent (client) span, current: %v, parent: %v", span.SpanID(), span.ParentSpanID()))
@@ -362,7 +362,7 @@ func (s *storage) pushTraceData(ctx context.Context, td ptrace.Traces) error {
 			hop = Hop{
 				IsAsynchronous: isAsyncRequest,
 				IsWithError:    isHasError,
-				From:           s.newResourceFromServerSpan(*spanAndResource.Span),
+				From:           s.inferFromResourceFromServerSpan(*spanAndResource.Span),
 				To:             s.newOperationFromSpanAndResource(spanAndResource),
 			}
 		} else {
@@ -445,7 +445,7 @@ func (s *storage) newResource(resource pcommon.Resource) Resource {
 	return *newResource
 }
 
-func (s *storage) newResourceFromServerSpan(span ptrace.Span) Resource {
+func (s *storage) inferFromResourceFromServerSpan(span ptrace.Span) Resource {
 	var resource *Resource = nil
 
 	userAgent, found := span.Attributes().Get(conventions.AttributeHTTPUserAgent)
@@ -486,7 +486,7 @@ func (s *storage) newResourceFromServerSpan(span ptrace.Span) Resource {
 	return *resource
 }
 
-func (s *storage) newResourceFromClientSpan(span ptrace.Span) Resource {
+func (s *storage) inferToResourceFromClientSpan(span ptrace.Span) Resource {
 	var resource *Resource = nil
 
 	dbSystem, foundDbSystem := span.Attributes().Get(conventions.AttributeDBSystem)
@@ -582,7 +582,7 @@ func (s *storage) newOperationFromSpanAndResource(spanAndResource SpanAndResourc
 	}
 }
 
-func (s *storage) newOperationFromClientSpan(span ptrace.Span) Operation {
+func (s *storage) inferToOperationFromClientSpan(span ptrace.Span) Operation {
 	name := strings.TrimSpace(span.Name())
 	if name == "" {
 		s.Logger.Info(fmt.Sprintf("empty operation name inferred from client span, args: %v", span.Attributes().AsRaw()))
@@ -591,7 +591,7 @@ func (s *storage) newOperationFromClientSpan(span ptrace.Span) Operation {
 
 	return Operation{
 		Name:      name,
-		DefinedIn: s.newResourceFromClientSpan(span),
+		DefinedIn: s.inferToResourceFromClientSpan(span),
 	}
 }
 
