@@ -64,123 +64,7 @@ type storage struct {
 	Logger *zap.Logger
 }
 
-func makeJaegerProtoReferences(
-	links ptrace.SpanLinkSlice,
-	parentSpanID pcommon.SpanID,
-	traceID pcommon.TraceID,
-) ([]OtelSpanRef, error) {
-
-	parentSpanIDSet := len([8]byte(parentSpanID)) != 0
-	if !parentSpanIDSet && links.Len() == 0 {
-		return nil, nil
-	}
-
-	refsCount := links.Len()
-	if parentSpanIDSet {
-		refsCount++
-	}
-
-	refs := make([]OtelSpanRef, 0, refsCount)
-
-	// Put parent span ID at the first place because usually backends look for it
-	// as the first CHILD_OF item in the model.SpanRef slice.
-	if parentSpanIDSet {
-
-		refs = append(refs, OtelSpanRef{
-			TraceId: traceID.HexString(),
-			SpanId:  parentSpanID.HexString(),
-			RefType: "CHILD_OF",
-		})
-	}
-
-	for i := 0; i < links.Len(); i++ {
-		link := links.At(i)
-
-		refs = append(refs, OtelSpanRef{
-			TraceId: link.TraceID().HexString(),
-			SpanId:  link.SpanID().HexString(),
-
-			// Since Jaeger RefType is not captured in internal data,
-			// use SpanRefType_FOLLOWS_FROM by default.
-			// SpanRefType_CHILD_OF supposed to be set only from parentSpanID.
-			RefType: "FOLLOWS_FROM",
-		})
-	}
-
-	return refs, nil
-}
-
-//func NewResource(resource pcommon.Resource) Resource {
-//	name := "<nil-service-name>"
-//	resourceType := ResourceTypeUnknown
-//
-//	serviceName, found := resource.Attributes().Get(conventions.AttributeServiceName)
-//	if found {
-//		name = serviceName.Str()
-//	}
-//
-//	return Resource{
-//		Name:       name,
-//		Type:       resourceType,
-//		Operations: nil,
-//	}
-//}
-
-func (s *storage) NewResourceFromSpan(span ptrace.Span) Resource {
-	name := "<nil-service-name>"
-	resourceType := ResourceTypeUnknown
-
-	dbSystem, foundDbSystem := span.Attributes().Get(conventions.AttributeDBName)
-	dbName, found := span.Attributes().Get(conventions.AttributeDBName)
-	if found {
-		if foundDbSystem {
-			name = fmt.Sprintf("%s.%s", dbSystem.Str(), dbName.Str())
-		} else {
-			name = dbName.Str()
-		}
-		resourceType = ResourceTypeStorage
-		return Resource{
-			Name: name,
-			Type: resourceType,
-		}
-	}
-
-	userAgent, found := span.Attributes().Get(conventions.AttributeHTTPUserAgent)
-	if found {
-		name = strings.Split(userAgent.Str(), "/")[0]
-		resourceType = ResourceTypeBrowser
-		return Resource{
-			Name: name,
-			Type: resourceType,
-		}
-	}
-
-	serviceName, found := span.Attributes().Get(conventions.AttributeServiceName)
-	if found {
-		name = serviceName.Str()
-		resourceType = ResourceTypeService
-		return Resource{
-			Name: name,
-			Type: resourceType,
-		}
-	}
-
-	s.Logger.Info(fmt.Sprintf("unknown span: %v", span.Attributes().AsRaw()))
-	return Resource{
-		Name: name,
-		Type: resourceType,
-	}
-}
-
-func (s *storage) NewOperationFromSpan(span ptrace.Span) Operation {
-	return Operation{
-		Name:      span.Name(),
-		DefinedIn: s.NewResourceFromSpan(span),
-	}
-}
-
 func populateOtherDimensions(attributes pcommon.Map, span *Span) {
-
 	attributes.Range(func(k string, v pcommon.Value) bool {
 		if k == "http.status_code" {
 			if v.Int() >= 400 {
@@ -220,17 +104,6 @@ func populateOtherDimensions(attributes pcommon.Map, span *Span) {
 		} else if k == "peer.service" {
 			span.PeerService = v.Str()
 		} else if k == "rpc.grpc.status_code" {
-			// Handle both string/int status code in GRPC spans.
-			statusString, err := strconv.Atoi(v.Str())
-			statusInt := v.Int()
-			if err == nil && statusString != 0 {
-				statusInt = int64(statusString)
-			}
-			if statusInt >= 2 {
-				span.HasError = true
-			}
-			span.GRPCCode = strconv.FormatInt(statusInt, 10)
-			span.ResponseStatusCode = span.GRPCCode
 		} else if k == "rpc.method" {
 			span.RPCMethod = v.Str()
 			system, found := attributes.Get("rpc.system")
@@ -245,7 +118,6 @@ func populateOtherDimensions(attributes pcommon.Map, span *Span) {
 			span.ResponseStatusCode = v.Str()
 		}
 		return true
-
 	})
 
 }
@@ -320,8 +192,6 @@ func newStructuredSpan(otelSpan ptrace.Span, ServiceName string, resource pcommo
 
 	})
 
-	references, _ := makeJaegerProtoReferences(otelSpan.Links(), otelSpan.ParentSpanID(), otelSpan.TraceID())
-
 	tenant := usage.GetTenantNameFromResource(resource)
 
 	var span = &Span{
@@ -347,7 +217,6 @@ func newStructuredSpan(otelSpan ptrace.Span, ServiceName string, resource pcommo
 			StartTimeUnixNano: uint64(otelSpan.StartTimestamp()),
 			ServiceName:       ServiceName,
 			Kind:              int8(otelSpan.Kind()),
-			References:        references,
 			TagMap:            tagMap,
 			StringTagMap:      stringTagMap,
 			NumberTagMap:      numberTagMap,
@@ -409,6 +278,11 @@ type Operation struct {
 	DefinedIn Resource
 }
 
+type SpanAndResource struct {
+	Span     *ptrace.Span
+	Resource *pcommon.Resource
+}
+
 func (e Operation) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 	enc.AddString("name", e.Name)
 	return enc.AddObject("definedIn", e.DefinedIn)
@@ -416,12 +290,13 @@ func (e Operation) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 
 // traceDataPusher implements OTEL exporterhelper.traceDataPusher
 func (s *storage) pushTraceData(ctx context.Context, td ptrace.Traces) error {
-	structuredSpans := make(map[pcommon.SpanID]ptrace.Span, td.ResourceSpans().Len())
-	childrenSpans := make(map[pcommon.SpanID][]ptrace.Span, td.ResourceSpans().Len())
+	structuredSpans := make(map[pcommon.SpanID]SpanAndResource, td.ResourceSpans().Len())
+	childrenSpans := make(map[pcommon.SpanID][]SpanAndResource, td.ResourceSpans().Len())
 
 	rss := td.ResourceSpans()
 	for i := 0; i < rss.Len(); i++ {
 		rs := rss.At(i)
+		resource := rs.Resource()
 
 		ilss := rs.ScopeSpans()
 		for j := 0; j < ilss.Len(); j++ {
@@ -431,25 +306,31 @@ func (s *storage) pushTraceData(ctx context.Context, td ptrace.Traces) error {
 			for k := 0; k < spans.Len(); k++ {
 				span := spans.At(k)
 
-				structuredSpans[span.SpanID()] = span
+				spanAndResource := SpanAndResource{
+					Span:     &span,
+					Resource: &resource,
+				}
+				structuredSpans[span.SpanID()] = spanAndResource
 				if !span.ParentSpanID().IsEmpty() {
 					childrenSlice, childSliceExists := childrenSpans[span.ParentSpanID()]
 					if !childSliceExists {
-						childrenSlice = make([]ptrace.Span, 2)
+						childrenSlice = make([]SpanAndResource, 2)
 						childrenSpans[span.ParentSpanID()] = childrenSlice
-						childrenSlice = append(childrenSlice, span)
+						childrenSlice = append(childrenSlice, spanAndResource)
 					}
 				}
 			}
 		}
 	}
 
-	for _, span := range structuredSpans {
-		if span.Kind() != ptrace.SpanKindClient || span.Kind() != ptrace.SpanKindServer || span.Kind() != ptrace.SpanKindProducer || span.Kind() != ptrace.SpanKindConsumer {
+	for _, spanAndResource := range structuredSpans {
+		span := spanAndResource.Span
+		if span.Kind() != ptrace.SpanKindClient && span.Kind() != ptrace.SpanKindServer && span.Kind() != ptrace.SpanKindProducer && span.Kind() != ptrace.SpanKindConsumer {
+			s.Logger.Info(fmt.Sprintf("skip spanKind %v", span.Kind()))
 			continue
 		}
 
-		parent, hasParent := structuredSpans[span.ParentSpanID()]
+		parentAndResource, hasParent := structuredSpans[span.ParentSpanID()]
 		_, hasChildrenSpans := childrenSpans[span.SpanID()]
 		hasNoCorrespondingServerSpan := !hasChildrenSpans
 
@@ -462,50 +343,217 @@ func (s *storage) pushTraceData(ctx context.Context, td ptrace.Traces) error {
 		}
 
 		isAsyncRequest := span.Kind() == ptrace.SpanKindProducer || span.Kind() == ptrace.SpanKindConsumer
-		isHasError := span.Status().Code() == 2
+		isHasError := extractIsError(*span)
 
 		hop := Hop{}
-		// if no server requests, process client
 		if hasNoCorrespondingServerSpan {
-			// we not always process client request, it's an exception
+			s.Logger.Info(fmt.Sprintf("No children (server) span, current: %v", span.SpanID()))
+			// a client/producer span may not have corresponding server/consumer handler if the part is not
+			// instrumented (usually databases are not) or is outside of this system's scope, for situations like that
 			hop = Hop{
 				IsAsynchronous: isAsyncRequest,
 				IsWithError:    isHasError,
-				From:           s.NewResourceFromSpan(span),
-				To:             s.NewOperationFromSpan(span),
+				From:           s.newResource(*spanAndResource.Resource),
+				To:             s.newOperationFromClientSpan(*spanAndResource.Span),
+			}
+		} else if !hasParent {
+			s.Logger.Info(fmt.Sprintf("No parent (client) span, current: %v, parent: %v", span.SpanID(), span.ParentSpanID()))
+			// usually indicates the root span which can be service or browser
+			hop = Hop{
+				IsAsynchronous: isAsyncRequest,
+				IsWithError:    isHasError,
+				From:           s.newResourceFromServerSpan(*spanAndResource.Span),
+				To:             s.newOperationFromSpanAndResource(spanAndResource),
 			}
 		} else {
-			// current span is server one, get parent one - client and define resource, operations
-			clientSpan := parent
-			if !hasParent {
-				clientSpan = span
-			}
-			serverSpan := span
-
-			//zap.S().Errorf("1, Client span: %v, parent span: %v, span: %v", clientSpan, parent, span)
-			//s.Logger.Error(fmt.Sprintf("2, Client span: %v, parent span: %v, span: %v", clientSpan, parent, span))
-			//fmt.Printf("3. Client span: %v, parent span: %v, span: %v", clientSpan, parent, span)
-
 			hop = Hop{
 				IsAsynchronous: isAsyncRequest,
 				IsWithError:    isHasError,
-				From:           s.NewResourceFromSpan(clientSpan),
-				To:             s.NewOperationFromSpan(serverSpan),
+				From:           s.newResource(*parentAndResource.Resource),
+				To:             s.newOperationFromSpanAndResource(spanAndResource),
 			}
-
 		}
 
 		err := s.Writer.WriteHop(&hop)
 		if err != nil {
-			zap.S().Error("Error in writing hops to clickhouse: ", err)
+			s.Logger.Error(fmt.Sprintf("Error in writing hops to neo4j: %v", err))
 		}
 	}
 
 	return nil
 }
 
-func (s *storage) calculateSpanHash() {
+func extractIsError(span ptrace.Span) bool {
+	spanCode := span.Status().Code()
+	if spanCode != ptrace.StatusCodeUnset {
+		return spanCode == ptrace.StatusCodeError
+	}
 
+	httpCode, found := span.Attributes().Get(conventions.AttributeRPCGRPCStatusCode)
+	if found && httpCode.Int() >= 400 {
+		return true
+	}
+
+	rpcCode, found := span.Attributes().Get(conventions.AttributeRPCGRPCStatusCode)
+	if found {
+		statusString, err := strconv.Atoi(rpcCode.Str())
+		statusInt := rpcCode.Int()
+		if err == nil && statusString != 0 {
+			statusInt = int64(statusString)
+		}
+		if statusInt >= 2 {
+			return true
+		}
+	}
+
+	_, found = span.Attributes().Get(conventions.AttributeRPCJsonrpcErrorCode)
+	if found {
+		return true
+	}
+
+	return false
+}
+
+func (s *storage) newResource(resource pcommon.Resource) Resource {
+	name := "<nil-service-name>"
+	resourceType := ResourceTypeUnknown
+
+	userAgent, found := resource.Attributes().Get(conventions.AttributeHTTPUserAgent)
+	if found {
+		name = strings.Split(userAgent.Str(), "/")[0]
+		resourceType = ResourceTypeBrowser
+		return Resource{
+			Name: name,
+			Type: resourceType,
+		}
+	}
+
+	serviceName, found := resource.Attributes().Get(conventions.AttributeServiceName)
+	if found {
+		name = serviceName.Str()
+		resourceType = ResourceTypeService
+		return Resource{
+			Name: name,
+			Type: resourceType,
+		}
+	}
+
+	s.Logger.Info(fmt.Sprintf("unknown span: %v", resource.Attributes().AsRaw()))
+	return Resource{
+		Name: name,
+		Type: resourceType,
+	}
+}
+
+func (s *storage) newResourceFromServerSpan(span ptrace.Span) Resource {
+	name := "<nil-service-name>"
+	resourceType := ResourceTypeUnknown
+
+	userAgent, found := span.Attributes().Get(conventions.AttributeHTTPUserAgent)
+	if found {
+		return Resource{
+			Name: strings.Split(userAgent.Str(), "/")[0],
+			Type: ResourceTypeBrowser,
+		}
+	}
+
+	_, found = span.Attributes().Get(conventions.AttributeHTTPMethod)
+	peerName, _ := span.Attributes().Get(conventions.AttributeNetPeerName)
+	if found {
+		return Resource{
+			Name: peerName.Str(),
+			Type: ResourceTypeService,
+		}
+	}
+
+	s.Logger.Info(fmt.Sprintf("unknown span: %v", span.Attributes().AsRaw()))
+	return Resource{
+		Name: name,
+		Type: resourceType,
+	}
+}
+
+func (s *storage) newResourceFromClientSpan(span ptrace.Span) Resource {
+	name := "<nil-service-name>"
+	resourceType := ResourceTypeUnknown
+
+	dbSystem, foundDbSystem := span.Attributes().Get(conventions.AttributeDBSystem)
+	dbName, foundDbName := span.Attributes().Get(conventions.AttributeDBName)
+	if foundDbSystem {
+		if foundDbName {
+			name = fmt.Sprintf("%s.%s", dbSystem.Str(), dbName.Str())
+		} else {
+			name = dbSystem.Str()
+		}
+		return Resource{
+			Name: name,
+			Type: ResourceTypeStorage,
+		}
+	}
+
+	messagingSystem, foundMessagingSystem := span.Attributes().Get(conventions.AttributeMessagingSystem)
+	destinationNameAnonymous, foundDestinationNameAnonymous := span.Attributes().Get("messaging.destination.anonymous")
+	destinationName, foundDestinationName := span.Attributes().Get("messaging.destination.name")
+	destinationTemplate, foundDestinationTemplate := span.Attributes().Get("messaging.destination.template")
+	if foundMessagingSystem {
+		name = messagingSystem.Str()
+
+		if foundDestinationTemplate {
+			name = destinationTemplate.Str()
+		} else if foundDestinationNameAnonymous && !destinationNameAnonymous.Bool() && foundDestinationName {
+			name = destinationName.Str()
+		}
+
+		return Resource{
+			Name: name,
+			Type: ResourceTypeService,
+		}
+	}
+
+	userAgent, found := span.Attributes().Get(conventions.AttributeHTTPUserAgent)
+	if found {
+		return Resource{
+			Name: strings.Split(userAgent.Str(), "/")[0],
+			Type: ResourceTypeBrowser,
+		}
+	}
+
+	_, found = span.Attributes().Get(conventions.AttributeHTTPMethod)
+	peerName, _ := span.Attributes().Get(conventions.AttributeNetPeerName)
+	if found {
+		return Resource{
+			Name: peerName.Str(),
+			Type: ResourceTypeService,
+		}
+	}
+
+	rpcService, found := span.Attributes().Get(conventions.AttributeRPCService)
+	if found {
+		return Resource{
+			Name: rpcService.Str(),
+			Type: ResourceTypeService,
+		}
+	}
+
+	s.Logger.Info(fmt.Sprintf("unknown span: %v", span.Attributes().AsRaw()))
+	return Resource{
+		Name: name,
+		Type: resourceType,
+	}
+}
+
+func (s *storage) newOperationFromSpanAndResource(spanAndResource SpanAndResource) Operation {
+	return Operation{
+		Name:      spanAndResource.Span.Name(),
+		DefinedIn: s.newResource(*spanAndResource.Resource),
+	}
+}
+
+func (s *storage) newOperationFromClientSpan(span ptrace.Span) Operation {
+	return Operation{
+		Name:      span.Name(),
+		DefinedIn: s.newResourceFromClientSpan(span),
+	}
 }
 
 // Shutdown will shutdown the exporter.
