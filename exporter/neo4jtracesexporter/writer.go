@@ -162,13 +162,15 @@ ON CREATE
 ON MATCH
     SET operation.lastUsedAt = timestamp()
 
+WITH operation
+
 OPTIONAL MATCH (r:Resource) 
     WHERE $toResourceName =~ "(?i).*" + r.name + ".*" 
 		OR r.name =~ "(?i).*" + $toResourceName + ".*"
 WITH CASE r IS NULL
         WHEN true THEN $toResourceName
         ELSE r.name
-     END as resourceName
+     END as resourceName, operation
 MERGE (toResource:Resource {name: resourceName})
 ON CREATE
     SET
@@ -177,6 +179,8 @@ ON CREATE
         toResource.type = $toResourceType
 ON MATCH
     SET toResource.lastUsedAt = timestamp()
+
+WITH operation, toResource
 
 MERGE
     (toResource)-[provides:Provides]->(operation)
@@ -187,13 +191,15 @@ ON CREATE
 ON MATCH
     SET provides.lastUsedAt = timestamp()
 
+WITH operation, toResource
+
 OPTIONAL MATCH (r:Resource) 
     WHERE $fromResourceName =~ "(?i).*" + r.name + ".*" 
 		OR r.name =~ "(?i).*" + $fromResourceName + ".*"
 WITH CASE r IS NULL
         WHEN true THEN $fromResourceName
         ELSE r.name
-     END as resourceName
+     END as resourceName, operation, toResource
 MERGE (fromResource:Resource {name: resourceName})
 ON CREATE
     SET
@@ -202,6 +208,8 @@ ON CREATE
         fromResource.type = $fromResourceType
 ON MATCH
     SET fromResource.lastUsedAt = timestamp()
+
+WITH operation, toResource, fromResource
 
 MERGE
     (fromResource)-[c:Calls]->(operation)
@@ -225,7 +233,7 @@ ON MATCH
                         WHEN true THEN 1
                         ELSE 0
                     END
-						`, map[string]any{
+					`, map[string]any{
 			"fromResourceName": hop.From.Name,
 			"fromResourceType": hop.From.Type,
 			"toResourceName":   hop.To.DefinedIn.Name,
