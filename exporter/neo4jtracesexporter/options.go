@@ -108,7 +108,9 @@ func defaultConnector(cfg *namespaceConfig) (neo4j.SessionWithContext, error) {
 		return nil, err
 	}
 
-	db := driver.NewSession(ctx, neo4j.SessionConfig{})
+	db := driver.NewSession(ctx, neo4j.SessionConfig{
+		DatabaseName: dsnURL.Query().Get("db"),
+	})
 
 	return db, nil
 }
