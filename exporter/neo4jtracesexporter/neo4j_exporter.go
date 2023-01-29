@@ -415,43 +415,27 @@ func extractIsError(span ptrace.Span) bool {
 }
 
 func (s *storage) newResource(resource pcommon.Resource) Resource {
-	name := "<nil-service-name>"
-	resourceType := ResourceTypeUnknown
-
-	userAgent, found := resource.Attributes().Get(conventions.AttributeHTTPUserAgent)
-	if found {
-		name = strings.Split(userAgent.Str(), "/")[0]
-		resourceType = ResourceTypeBrowser
-		return Resource{
-			Name: name,
-			Type: resourceType,
-		}
-	}
-
 	serviceName, found := resource.Attributes().Get(conventions.AttributeServiceName)
 	if found {
-		name = serviceName.Str()
-		resourceType = ResourceTypeService
 		return Resource{
-			Name: name,
-			Type: resourceType,
+			Name: serviceName.Str(),
+			Type: ResourceTypeService,
 		}
 	}
 
-	s.Logger.Info(fmt.Sprintf("unknown span: %v", resource.Attributes().AsRaw()))
+	s.Logger.Info("can't get resource name from resource")
 	return Resource{
-		Name: name,
-		Type: resourceType,
+		Name: "<nil-service-name>",
+		Type: ResourceTypeUnknown,
 	}
 }
 
 func (s *storage) newResourceFromServerSpan(span ptrace.Span) Resource {
-	name := "<nil-service-name>"
-	resourceType := ResourceTypeUnknown
+	var resource *Resource = nil
 
 	userAgent, found := span.Attributes().Get(conventions.AttributeHTTPUserAgent)
 	if found {
-		return Resource{
+		resource = &Resource{
 			Name: strings.Split(userAgent.Str(), "/")[0],
 			Type: ResourceTypeBrowser,
 		}
@@ -460,32 +444,37 @@ func (s *storage) newResourceFromServerSpan(span ptrace.Span) Resource {
 	_, found = span.Attributes().Get(conventions.AttributeHTTPMethod)
 	peerName, _ := span.Attributes().Get(conventions.AttributeNetPeerName)
 	if found {
-		return Resource{
+		resource = &Resource{
 			Name: peerName.Str(),
 			Type: ResourceTypeService,
 		}
 	}
 
-	s.Logger.Info(fmt.Sprintf("unknown span: %v", span.Attributes().AsRaw()))
-	return Resource{
-		Name: name,
-		Type: resourceType,
+	if resource == nil {
+		s.Logger.Info(fmt.Sprintf("unknown span: %v", span.Attributes().AsRaw()))
+		resource = &Resource{
+			Name: "<nil-service-name>",
+			Type: ResourceTypeUnknown,
+		}
 	}
+
+	s.Logger.Info(fmt.Sprintf("resource from server span, name: %v, attributes: %v", resource.Name, span.Attributes()))
+	return *resource
 }
 
 func (s *storage) newResourceFromClientSpan(span ptrace.Span) Resource {
-	name := "<nil-service-name>"
-	resourceType := ResourceTypeUnknown
+	var resource *Resource = nil
 
 	dbSystem, foundDbSystem := span.Attributes().Get(conventions.AttributeDBSystem)
 	dbName, foundDbName := span.Attributes().Get(conventions.AttributeDBName)
 	if foundDbSystem {
+		name := ""
 		if foundDbName {
 			name = fmt.Sprintf("%s.%s", dbSystem.Str(), dbName.Str())
 		} else {
 			name = dbSystem.Str()
 		}
-		return Resource{
+		resource = &Resource{
 			Name: name,
 			Type: ResourceTypeStorage,
 		}
@@ -496,7 +485,7 @@ func (s *storage) newResourceFromClientSpan(span ptrace.Span) Resource {
 	destinationName, foundDestinationName := span.Attributes().Get("messaging.destination.name")
 	destinationTemplate, foundDestinationTemplate := span.Attributes().Get("messaging.destination.template")
 	if foundMessagingSystem {
-		name = messagingSystem.Str()
+		name := messagingSystem.Str()
 
 		if foundDestinationTemplate {
 			name = destinationTemplate.Str()
@@ -504,7 +493,7 @@ func (s *storage) newResourceFromClientSpan(span ptrace.Span) Resource {
 			name = destinationName.Str()
 		}
 
-		return Resource{
+		resource = &Resource{
 			Name: name,
 			Type: ResourceTypeService,
 		}
@@ -512,7 +501,7 @@ func (s *storage) newResourceFromClientSpan(span ptrace.Span) Resource {
 
 	userAgent, found := span.Attributes().Get(conventions.AttributeHTTPUserAgent)
 	if found {
-		return Resource{
+		resource = &Resource{
 			Name: strings.Split(userAgent.Str(), "/")[0],
 			Type: ResourceTypeBrowser,
 		}
@@ -521,7 +510,7 @@ func (s *storage) newResourceFromClientSpan(span ptrace.Span) Resource {
 	_, found = span.Attributes().Get(conventions.AttributeHTTPMethod)
 	peerName, _ := span.Attributes().Get(conventions.AttributeNetPeerName)
 	if found {
-		return Resource{
+		resource = &Resource{
 			Name: peerName.Str(),
 			Type: ResourceTypeService,
 		}
@@ -529,17 +518,22 @@ func (s *storage) newResourceFromClientSpan(span ptrace.Span) Resource {
 
 	rpcService, found := span.Attributes().Get(conventions.AttributeRPCService)
 	if found {
-		return Resource{
+		resource = &Resource{
 			Name: rpcService.Str(),
 			Type: ResourceTypeService,
 		}
 	}
 
-	s.Logger.Info(fmt.Sprintf("unknown span: %v", span.Attributes().AsRaw()))
-	return Resource{
-		Name: name,
-		Type: resourceType,
+	if resource == nil {
+		s.Logger.Info(fmt.Sprintf("unknown span: %v", span.Attributes().AsRaw()))
+		resource = &Resource{
+			Name: "<nil-service-name>",
+			Type: ResourceTypeUnknown,
+		}
 	}
+
+	s.Logger.Info(fmt.Sprintf("resource from client span, name: %v, attributes: %v", resource.Name, span.Attributes()))
+	return *resource
 }
 
 func (s *storage) newOperationFromSpanAndResource(spanAndResource SpanAndResource) Operation {
