@@ -314,9 +314,8 @@ func (s *storage) pushTraceData(ctx context.Context, td ptrace.Traces) error {
 				if !span.ParentSpanID().IsEmpty() {
 					childrenSlice, childSliceExists := childrenSpans[span.ParentSpanID()]
 					if !childSliceExists {
-						childrenSlice = make([]SpanAndResource, 2)
+						childrenSlice = []SpanAndResource{spanAndResource}
 						childrenSpans[span.ParentSpanID()] = childrenSlice
-						childrenSlice = append(childrenSlice, spanAndResource)
 					}
 				}
 			}

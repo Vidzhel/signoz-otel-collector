@@ -35,7 +35,7 @@ build:
 
 .PHONY: run
 run:
-	go run cmd/signozcollector/* --config ${CONFIG_FILE}
+	go run cmd/signozcollector/main.go --config ${CONFIG_FILE}
 
 .PHONY: fmt
 fmt:
@@ -57,7 +57,7 @@ build-signoz-collector:
 	@echo  "--> Build signoz collector docker image"
 	@echo "------------------"
 	docker build --build-arg TARGETPLATFORM="linux/amd64" \
-		--no-cache -f cmd/signozcollector/Dockerfile --progress plane \
+		-f cmd/signozcollector/Dockerfile --progress plain \
 		--tag $(REPONAME)/$(IMAGE_NAME):$(DOCKER_TAG) .
 
 .PHONY: lint
